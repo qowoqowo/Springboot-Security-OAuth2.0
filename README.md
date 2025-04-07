@@ -46,56 +46,174 @@ Spring Boot 3.4.4 기반의 기본 로그인 + OAuth2 로그인(Google, Facebook
     <dependency>spring-boot-starter-test</dependency>
     <dependency>spring-security-test</dependency>
 </dependencies>
-🧾 OAuth2 설정 예시 (application.yml)
+```
 
+🧾 OAuth2 설정 예시 (application.yml)
+```yaml
 spring:
   security:
     oauth2:
       client:
         registration:
-          google:
+          google: # /oauth2/authorization/google 이 주소를 동작하게 한다.
             client-id: [구글 클라이언트 ID]
             client-secret: [구글 시크릿]
             scope:
-              - profile
-              - email
+            - email
+            - profile
+            
           facebook:
             client-id: [페이스북 클라이언트 ID]
             client-secret: [페이스북 시크릿]
             scope:
-              - public_profile
-              - email
+            - email
+            - public_profile
+          
+          # 네이버는 OAuth2.0 공식 지원대상이 아니라서 provider 설정이 필요하다.
+          # 요청주소도 다르고, 응답 데이터도 다르기 때문이다.
           naver:
             client-id: [네이버 클라이언트 ID]
             client-secret: [네이버 시크릿]
-            client-name: Naver
-            authorization-grant-type: authorization_code
-            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
             scope:
-              - name
-              - email
-            provider: naver
+            - name
+            - email
+            - profile_image
+            client-name: Naver # 클라이언트 네임은 구글 페이스북도 대문자로 시작하더라.
+            authorization-grant-type: authorization_code
+            redirect-uri: http://localhost:8080/login/oauth2/code/naver
+
         provider:
           naver:
             authorization-uri: https://nid.naver.com/oauth2.0/authorize
             token-uri: https://nid.naver.com/oauth2.0/token
             user-info-uri: https://openapi.naver.com/v1/nid/me
-            user-name-attribute: response
-📁 프로젝트 구조 예시
+            user-name-attribute: response # 회원정보를 json의 response 키값으로 리턴해줌.
+```
+⚙️ 핵심 설정 코드
+SecurityConfig.java
+```java
+@Configuration
+@EnableWebSecurity
+@RequiredArgsConstructor
+public class SecurityConfig {
 
-└── com.cos.security
-    ├── config
-    │   ├── SecurityConfig.java
-    │   └── oauth
-    │       ├── PrincipalOauth2UserService.java
-    │       └── provider
-    │           ├── GoogleUserInfo.java
-    │           ├── FacebookUserInfo.java
-    │           └── NaverUserInfo.java
-    ├── controller
-    ├── model
-    ├── repository
-    └── service
+    private final PrincipalOauth2UserService principalOauth2UserService;
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http.csrf(csrf -> csrf.disable());
+
+        http.authorizeHttpRequests(auth -> auth
+            .requestMatchers("/user/**").authenticated()
+            .requestMatchers("/manager/**").hasAnyRole("ADMIN", "MANAGER")
+            .requestMatchers("/admin/**").hasRole("ADMIN")
+            .anyRequest().permitAll()
+        );
+
+        http.formLogin(form -> form
+            .loginPage("/loginForm")
+            .loginProcessingUrl("/login")
+            .defaultSuccessUrl("/")
+        );
+
+        http.oauth2Login(oauth2 -> oauth2
+            .loginPage("/loginForm")
+            .userInfoEndpoint(userInfo -> userInfo
+                .userService(principalOauth2UserService)
+            )
+        );
+
+        return http.build();
+    }
+
+    @Bean
+    public BCryptPasswordEncoder bCryptPasswordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+}
+```
+PrincipalOauth2UserService.java
+```java
+@Service
+@RequiredArgsConstructor
+public class PrincipalOauth2UserService extends DefaultOAuth2UserService {
+
+    private final UserRepository userRepository;
+    private final BCryptPasswordEncoder bCryptPasswordEncoder;
+
+    @Override
+    public OAuth2User loadUser(OAuth2UserRequest userRequest) throws OAuth2AuthenticationException {
+        OAuth2User oAuth2User = super.loadUser(userRequest);
+
+        OAuth2UserInfo oAuth2UserInfo = null;
+        String provider = userRequest.getClientRegistration().getRegistrationId();
+
+        if (provider.equals("google")) {
+            oAuth2UserInfo = new GoogleUserInfo(oAuth2User.getAttributes());
+        } else if (provider.equals("facebook")) {
+            oAuth2UserInfo = new FacebookUserInfo(oAuth2User.getAttributes());
+        } else if (provider.equals("naver")) {
+            oAuth2UserInfo = new NaverUserInfo((Map<String, Object>) oAuth2User.getAttributes().get("response"));
+        }
+
+        String username = oAuth2UserInfo.getProvider() + "_" + oAuth2UserInfo.getProviderId();
+        String password = bCryptPasswordEncoder.encode("tempPassword");
+        String email = oAuth2UserInfo.getEmail();
+        String role = "ROLE_USER";
+
+        User userEntity = userRepository.findByUsername(username).orElseGet(() -> {
+            User newUser = User.builder()
+                .username(username)
+                .password(password)
+                .email(email)
+                .role(role)
+                .provider(provider)
+                .providerId(oAuth2UserInfo.getProviderId())
+                .build();
+            return userRepository.save(newUser);
+        });
+
+        return new PrincipalDetails(userEntity, oAuth2User.getAttributes());
+    }
+}
+
+```
+
+📁 프로젝트 구조 예시
+```text
+src/
+└── main/
+    ├── java/
+    │   └── com.cos.security/
+    │       ├── config/
+    │       │   ├── auth/
+    │       │   │   ├── PrincipalDetails.java
+    │       │   │   └── PrincipalDetailsService.java
+    │       │   ├── oauth/
+    │       │   │   ├── provider/
+    │       │   │   │   ├── FacebookUserInfo.java
+    │       │   │   │   ├── GoogleUserInfo.java
+    │       │   │   │   ├── NaverUserInfo.java
+    │       │   │   │   └── OAuth2UserInfo.java
+    │       │   │   └── PrincipalOauth2UserService.java
+    │       │   ├── AppConfig.java
+    │       │   ├── SecurityConfig.java
+    │       │   └── WebMvcConfig.java
+    │       ├── controller/
+    │       │   └── IndexController.java
+    │       ├── model/
+    │       │   └── User.java
+    │       ├── repository/
+    │       │   └── UserRepository.java
+    │       └── SecurityApplication.java
+    ├── resources/
+    │   ├── static/
+    │   ├── templates/
+    │   │   ├── index.html
+    │   │   ├── joinForm.html
+    │   │   └── loginForm.html
+    │   └── application.yml
+```
 
 🚀 실행 방법
 MySQL 실행 및 DB 생성 (security)
