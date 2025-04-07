@@ -47,9 +47,7 @@ Spring Boot 3.4.4 기반의 기본 로그인 + OAuth2 로그인(Google, Facebook
     <dependency>spring-security-test</dependency>
 </dependencies>
 🧾 OAuth2 설정 예시 (application.yml)
-yaml
-복사
-편집
+
 spring:
   security:
     oauth2:
@@ -84,9 +82,7 @@ spring:
             user-info-uri: https://openapi.naver.com/v1/nid/me
             user-name-attribute: response
 📁 프로젝트 구조 예시
-arduino
-복사
-편집
+
 └── com.cos.security
     ├── config
     │   ├── SecurityConfig.java
@@ -100,6 +96,7 @@ arduino
     ├── model
     ├── repository
     └── service
+
 🚀 실행 방법
 MySQL 실행 및 DB 생성 (security)
 
